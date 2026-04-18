@@ -1,12 +1,13 @@
 """
 官公庁の機関名からGoogle検索で公式HPのURLを取得し、スプレッドシートのF列に書き込む。
-対象シート：資格登録リスト
-B・C・D列の空白でない最初の値を機関名として使用する。
+対象シート：資格登録リスト  のコピー
+B・C・D列の薄黄色セルのみを対象にする（includeGridData で背景色を判定）。
 """
 import sys
 import time
 import logging
 from google.oauth2.service_account import Credentials
+from googleapiclient.discovery import build
 import gspread
 from ddgs import DDGS
 
@@ -31,6 +32,14 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 
+def is_light_yellow(bg: dict) -> bool:
+    """背景色が薄黄色かどうかを判定する（白・無色は除外）"""
+    r = bg.get("red", 1.0)
+    g = bg.get("green", 1.0)
+    b = bg.get("blue", 1.0)
+    return r >= 0.9 and g >= 0.85 and b < 0.95
+
+
 def find_official_url(org_name: str) -> str:
     query = f"{org_name} 公式サイト"
     try:
@@ -40,7 +49,6 @@ def find_official_url(org_name: str) -> str:
         log.warning(f"  検索失敗: {e}")
         return ""
 
-    # 公式ドメインを優先
     for url in urls:
         if any(d in url for d in OFFICIAL_DOMAINS):
             return url
@@ -49,23 +57,37 @@ def find_official_url(org_name: str) -> str:
 
 
 def main():
-    creds  = Credentials.from_service_account_file(CREDENTIALS_FILE, scopes=SCOPES)
+    creds   = Credentials.from_service_account_file(CREDENTIALS_FILE, scopes=SCOPES)
+    service = build("sheets", "v4", credentials=creds)
+
+    # includeGridData で書式（背景色）ごと取得
+    result = service.spreadsheets().get(
+        spreadsheetId=SPREADSHEET_ID,
+        ranges=[f"'{SHEET_NAME}'!B1:D600"],
+        includeGridData=True,
+    ).execute()
+
+    rows = result["sheets"][0]["data"][0].get("rowData", [])
+    log.info(f"シート読み込み完了: {len(rows)} 行")
+
+    # gspread クライアントはF列書き込み用
     client = gspread.authorize(creds)
     ws     = client.open_by_key(SPREADSHEET_ID).worksheet(SHEET_NAME)
 
-    data = ws.get_all_values()
-    log.info(f"シート読み込み完了: {len(data)} 行")
-
     count = 0
-    for i, row in enumerate(data):
+    for i, row in enumerate(rows):
         if count >= TEST_LIMIT:
             break
 
-        # B・C・D列（インデックス 1・2・3）の空白でない最初の値を使う
+        cells = row.get("values", [])  # B, C, D の順（インデックス 0, 1, 2）
+
+        # B・C・D列のうち薄黄色で空白でない最初のセルを機関名として使う
         org_name = ""
-        for col_idx in [1, 2, 3]:
-            if len(row) > col_idx and row[col_idx].strip():
-                org_name = row[col_idx].strip()
+        for cell in cells:
+            bg  = cell.get("effectiveFormat", {}).get("backgroundColor", {})
+            val = cell.get("formattedValue", "").strip().strip("\u3000")  # 全角スペース除去
+            if val and is_light_yellow(bg):
+                org_name = val
                 break
 
         if not org_name:
