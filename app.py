@@ -1,11 +1,10 @@
 """
 LINE Bot + Flask サーバー
 ・「リサーチ」→ scrape_procurement.py を実行してプッシュ通知
-・それ以外 → Claude API で返答
+・それ以外 → 使い方を案内
 """
 import os
 import sys
-import json
 import threading
 import subprocess
 import logging
@@ -17,7 +16,6 @@ from linebot.v3.messaging import (
 )
 from linebot.v3.webhooks import MessageEvent, TextMessageContent
 from linebot.v3.exceptions import InvalidSignatureError
-import anthropic
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -27,9 +25,6 @@ app = Flask(__name__)
 # ─── LINE ────────────────────────────────────────────────────────────────────
 handler     = WebhookHandler(os.environ["LINE_CHANNEL_SECRET"])
 line_config = Configuration(access_token=os.environ["LINE_CHANNEL_ACCESS_TOKEN"])
-
-# ─── Claude ──────────────────────────────────────────────────────────────────
-claude = anthropic.Anthropic()  # ANTHROPIC_API_KEY を環境変数から読む
 
 # ─── Google認証ファイルの生成（Render用）────────────────────────────────────
 def setup_google_credentials():
@@ -113,23 +108,11 @@ def handle_message(event: MessageEvent) -> None:
             ))
             threading.Thread(target=run_scrape, args=(user_id,), daemon=True).start()
 
-        # ── Claude で返答 ─────────────────────────────────────────────────
+        # ── その他 ───────────────────────────────────────────────────────
         else:
-            try:
-                resp = claude.messages.create(
-                    model="claude-haiku-4-5-20251001",
-                    max_tokens=600,
-                    system="あなたは親切なアシスタントです。日本語で簡潔に答えてください。",
-                    messages=[{"role": "user", "content": text}],
-                )
-                reply_text = resp.content[0].text.strip()[:4900]
-            except Exception as e:
-                log.exception("Claude API error")
-                reply_text = "申し訳ありません。エラーが発生しました。"
-
             api.reply_message(ReplyMessageRequest(
                 reply_token=event.reply_token,
-                messages=[TextMessage(text=reply_text)],
+                messages=[TextMessage(text="「リサーチ」と送ると官公庁の案件を調べます")],
             ))
 
 
