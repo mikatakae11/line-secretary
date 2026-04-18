@@ -62,6 +62,7 @@ BUSSHI_NG_KW = [
     "購入（物品", "物品の購入", "物品の調達", "物品購買",
     "物品の購買", "購買（物品",
 ]
+CONSUL_NG_KW = ["建設コンサルタント", "測量業務", "設計業務", "地質調査"]
 # カテゴリページ・案内ページとして除外するリンクテキスト（部分一致）
 CATEGORY_NG = [
     "入札公告（物品", "物品、役務等", "入札公告一覧", "入札情報一覧",
@@ -113,8 +114,10 @@ def classify(text: str, org_name: str) -> tuple[bool, str, str]:
     """
     full = text + " " + org_name
 
-    # 物品購入・カテゴリページ・終了済み案件は除外
+    # 物品購入・カテゴリページ・終了済み案件・コンサル系は除外
     if contains_any(full, BUSSHI_NG_KW):
+        return False, "", ""
+    if contains_any(full, CONSUL_NG_KW):
         return False, "", ""
     if is_category_page(text):
         return False, "", ""
@@ -154,7 +157,7 @@ def classify(text: str, org_name: str) -> tuple[bool, str, str]:
     return False, "", ""
 
 
-# ─── 日付抽出 ─────────────────────────────────────────────────────────────
+# ─── 日付パース・フィルタ ──────────────────────────────────────────────────
 _DATE_PATTERNS = [
     re.compile(r"令和\s*(\d+)\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日"),
     re.compile(r"R(\d+)[\.年/](\d{1,2})[\.月/](\d{1,2})日?"),
@@ -200,6 +203,52 @@ def is_too_old(deadline_str: str) -> bool:
     return year < CUTOFF_YEAR
 
 
+def parse_date_str(text: str) -> date | None:
+    """各種日付フォーマットを date オブジェクトに変換"""
+    m = re.search(r"令和\s*(\d+)\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日", text)
+    if m:
+        try:
+            return date(_REIWA_BASE + int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        except ValueError:
+            pass
+    m = re.search(r"R(\d+)[\.年/](\d{1,2})[\.月/](\d{1,2})", text)
+    if m:
+        try:
+            return date(_REIWA_BASE + int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        except ValueError:
+            pass
+    m = re.search(r"(\d{4})[年/\-](\d{1,2})[月/\-](\d{1,2})", text)
+    if m:
+        try:
+            return date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        except ValueError:
+            pass
+    return None
+
+
+def is_past_deadline(deadline_str: str) -> bool:
+    """締切日が今日より前なら True（日付なしは除外しない）"""
+    if not deadline_str:
+        return False
+    d = parse_date_str(deadline_str)
+    if d is None:
+        return False
+    return d < TODAY
+
+
+_PUB_DATE_KEYWORDS = ["公告日", "公開日", "掲載日", "公示日", "入札公告日", "受付開始日"]
+
+def extract_pub_date(text: str) -> date | None:
+    """テキストから公開日・公告日を抽出"""
+    for kw in _PUB_DATE_KEYWORDS:
+        idx = text.find(kw)
+        if idx >= 0:
+            d = parse_date_str(text[idx: idx + 40])
+            if d:
+                return d
+    return None
+
+
 # ─── HTTP取得 ─────────────────────────────────────────────────────────────
 def fetch(url: str) -> str | None:
     try:
@@ -214,7 +263,8 @@ def fetch(url: str) -> str | None:
 # ─── テーブルからの抽出 ────────────────────────────────────────────────────
 PROC_HDR_KW = ["件名", "案件", "入札", "工事", "役務", "物品", "調達", "業務", "契約"]
 
-def parse_tables(soup: BeautifulSoup, base_url: str, org_name: str) -> list[dict]:
+def parse_tables(soup: BeautifulSoup, base_url: str, org_name: str,
+                 last_research_date: date | None = None) -> list[dict]:
     results = []
     for table in soup.find_all("table"):
         first_row = table.find("tr")
@@ -237,10 +287,22 @@ def parse_tables(soup: BeautifulSoup, base_url: str, org_name: str) -> list[dict
             name      = link_tag.get_text(strip=True) if link_tag else tds[0].get_text(strip=True)
             deadline  = extract_deadline(row_text)
 
+            # 条件2: 締切日が今日より前は除外
+            if is_past_deadline(deadline):
+                continue
+
             ok, area, qual = classify(row_text + " " + name, org_name)
-            if ok and not is_too_old(deadline):
-                results.append(dict(name=name, qual=qual, area=area,
-                                    deadline=deadline, url=item_url))
+            if not ok or is_too_old(deadline):
+                continue
+
+            # 条件1: 前回リサーチ日より前に公開された案件は除外
+            if last_research_date:
+                pub_date = extract_pub_date(row_text)
+                if pub_date and pub_date < last_research_date:
+                    continue
+
+            results.append(dict(name=name, qual=qual, area=area,
+                                deadline=deadline, url=item_url))
     return results
 
 
@@ -248,7 +310,8 @@ def parse_tables(soup: BeautifulSoup, base_url: str, org_name: str) -> list[dict
 PROC_LINK_KW = ["工事", "役務", "清掃", "修繕", "電気", "建築", "保守",
                 "什器", "移設", "メンテ", "設備", "整備", "改修", "補修"]
 
-def parse_links(soup: BeautifulSoup, base_url: str, org_name: str) -> list[dict]:
+def parse_links(soup: BeautifulSoup, base_url: str, org_name: str,
+                last_research_date: date | None = None) -> list[dict]:
     results  = []
     seen     = set()
     # メインコンテンツ領域を優先
@@ -274,15 +337,28 @@ def parse_links(soup: BeautifulSoup, base_url: str, org_name: str) -> list[dict]
         ctx = a.parent.get_text(" ", strip=True) if a.parent else text
         deadline = extract_deadline(ctx + " " + text)
 
+        # 条件2: 締切日が今日より前は除外
+        if is_past_deadline(deadline):
+            continue
+
         ok, area, qual = classify(text + " " + ctx, org_name)
-        if ok and not is_too_old(deadline):
-            results.append(dict(name=text, qual=qual, area=area,
-                                deadline=deadline, url=item_url))
+        if not ok or is_too_old(deadline):
+            continue
+
+        # 条件1: 前回リサーチ日より前に公開された案件は除外
+        if last_research_date:
+            pub_date = extract_pub_date(ctx + " " + text)
+            if pub_date and pub_date < last_research_date:
+                continue
+
+        results.append(dict(name=text, qual=qual, area=area,
+                            deadline=deadline, url=item_url))
     return results
 
 
 # ─── 1機関スクレイピング ──────────────────────────────────────────────────
-def scrape(org_name: str, url: str) -> list[dict]:
+def scrape(org_name: str, url: str,
+           last_research_date: date | None = None) -> list[dict]:
     log.info(f"巡回中: {org_name}")
     html = fetch(url)
     if not html:
@@ -292,10 +368,10 @@ def scrape(org_name: str, url: str) -> list[dict]:
     for tag in soup(["script", "style", "noscript"]):
         tag.decompose()
 
-    items = parse_tables(soup, url, org_name)
+    items = parse_tables(soup, url, org_name, last_research_date)
 
     seen_urls = {i["url"] for i in items}
-    for item in parse_links(soup, url, org_name):
+    for item in parse_links(soup, url, org_name, last_research_date):
         if item["url"] not in seen_urls:
             items.append(item)
             seen_urls.add(item["url"])
@@ -321,12 +397,12 @@ def main():
     service = build("sheets", "v4", credentials=creds)
     sheet_data = service.spreadsheets().get(
         spreadsheetId=SPREADSHEET_ID,
-        ranges=[f"'{SOURCE_SHEET}'!A1:A80"],
+        ranges=[f"'{SOURCE_SHEET}'!A1:B80"],
         includeGridData=True,
     ).execute()
 
     rows = sheet_data["sheets"][0]["data"][0].get("rowData", [])
-    orgs: list[tuple[str, str]] = []
+    orgs: list[tuple[str, str, date | None]] = []
     for row in rows:
         vals = row.get("values", [])
         if not vals:
@@ -338,14 +414,20 @@ def main():
             continue
         if any(text.startswith(s) for s in SECTION_SKIP):
             continue
-        orgs.append((text, hyperlink))
+        # B列から前回リサーチ日を取得（なければ None）
+        last_date = None
+        if len(vals) >= 2:
+            date_str = vals[1].get("formattedValue", "").strip()
+            if date_str:
+                last_date = parse_date_str(date_str)
+        orgs.append((text, hyperlink, last_date))
 
     log.info(f"機関数: {len(orgs)}")
 
     # ── 各サイト巡回 ──
     all_items: list[dict] = []
-    for org_name, url in orgs:
-        found = scrape(org_name, url)
+    for org_name, url, last_date in orgs:
+        found = scrape(org_name, url, last_date)
         for item in found:
             all_items.append({"org": org_name, **item})
         time.sleep(REQUEST_INTERVAL)
