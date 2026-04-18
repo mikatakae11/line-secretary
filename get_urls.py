@@ -3,9 +3,11 @@
 対象シート：資格登録リスト  のコピー
 B・C・D列の薄黄色セルのみを対象にする（includeGridData で背景色を判定）。
 """
+import re
 import sys
 import time
 import logging
+from urllib.parse import urlparse
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 import gspread
@@ -17,11 +19,20 @@ SPREADSHEET_ID   = "1-VUFFVlKmmxEnBbkfzXcTNaFESqcYTNAJQQOCh5qApc"
 SHEET_NAME       = "資格登録リスト  のコピー"
 CREDENTIALS_FILE = "hp-research-account.json"
 SCOPES           = ["https://www.googleapis.com/auth/spreadsheets"]
-TEST_LIMIT       = 10
 INTERVAL         = 2.0
 
-# 公式ドメインと判定するパターン（優先順）
-OFFICIAL_DOMAINS = [".go.jp", ".lg.jp", ".ed.jp", ".ac.jp", ".or.jp", ".ne.jp"]
+# 優先順に並べた公式ドメイン
+OFFICIAL_DOMAINS = [
+    ".go.jp", ".mod.go.jp", ".lg.jp", ".ed.jp", ".ac.jp", ".or.jp",
+]
+
+# 除外するドメイン（信頼性の低いサイト）
+NG_DOMAINS = [
+    "wikipedia.org", "wikimedia.org", "grokipedia.com",
+    "crammbon.com", "yahoo.co.jp", "google.com",
+    "amazon.co.jp", "rakuten.co.jp", "twitter.com", "x.com",
+    "facebook.com", "instagram.com", "youtube.com",
+]
 
 logging.basicConfig(
     level=logging.INFO,
@@ -32,6 +43,13 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 
+def normalize_org_name(name: str) -> str:
+    """括弧内の略称と親機関名を除去し、末尾の機関名だけを返す"""
+    name = re.sub(r"[（(][A-Z]+[）)]", "", name)
+    parts = name.split()
+    return parts[-1] if parts else name.strip()
+
+
 def is_light_yellow(bg: dict) -> bool:
     """背景色が薄黄色かどうかを判定する（白・無色は除外）"""
     r = bg.get("red", 1.0)
@@ -40,20 +58,38 @@ def is_light_yellow(bg: dict) -> bool:
     return r >= 0.9 and g >= 0.85 and b < 0.95
 
 
+def is_ng(url: str) -> bool:
+    return any(ng in url for ng in NG_DOMAINS)
+
+
+def is_official(url: str) -> bool:
+    return any(d in url for d in OFFICIAL_DOMAINS)
+
+
 def find_official_url(org_name: str) -> str:
-    query = f"{org_name} 公式サイト"
+    query_name = normalize_org_name(org_name)
+    query = f"{query_name} 公式サイト"
+    log.info(f"  検索: {query}")
+
     try:
-        hits = DDGS().text(query, region="jp-jp", max_results=5)
+        hits = DDGS().text(query, region="jp-jp", max_results=10)
         urls = [r["href"] for r in hits] if hits else []
     except Exception as e:
         log.warning(f"  検索失敗: {e}")
         return ""
 
-    for url in urls:
-        if any(d in url for d in OFFICIAL_DOMAINS):
-            return url
+    # NGドメインを除外
+    urls = [u for u in urls if not is_ng(u)]
 
-    return urls[0] if urls else ""
+    # 1. 公式ドメインを優先順に探す
+    for domain in OFFICIAL_DOMAINS:
+        for url in urls:
+            if domain in url:
+                parsed = urlparse(url)
+                return f"{parsed.scheme}://{parsed.netloc}/"
+
+    # 2. 公式ドメインが見つからなければ空欄
+    return ""
 
 
 def main():
@@ -76,9 +112,6 @@ def main():
 
     count = 0
     for i, row in enumerate(rows):
-        if count >= TEST_LIMIT:
-            break
-
         cells = row.get("values", [])  # B, C, D の順（インデックス 0, 1, 2）
 
         # B・C・D列のうち薄黄色で空白でない最初のセルを機関名として使う
@@ -94,7 +127,7 @@ def main():
             continue
 
         row_num = i + 1  # スプレッドシートは1始まり
-        log.info(f"[{count + 1}/{TEST_LIMIT}] 行{row_num} | {org_name}")
+        log.info(f"[{count + 1}] 行{row_num} | {org_name}")
 
         url = find_official_url(org_name)
 
