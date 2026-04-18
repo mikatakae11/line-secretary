@@ -8,12 +8,12 @@ import time
 import logging
 from google.oauth2.service_account import Credentials
 import gspread
-from googlesearch import search
+from ddgs import DDGS
 
 sys.stdout.reconfigure(encoding="utf-8")
 
 SPREADSHEET_ID   = "1-VUFFVlKmmxEnBbkfzXcTNaFESqcYTNAJQQOCh5qApc"
-SHEET_NAME       = "資格登録リスト"
+SHEET_NAME       = "資格登録リスト  のコピー"
 CREDENTIALS_FILE = "hp-research-account.json"
 SCOPES           = ["https://www.googleapis.com/auth/spreadsheets"]
 TEST_LIMIT       = 10
@@ -34,17 +34,18 @@ log = logging.getLogger(__name__)
 def find_official_url(org_name: str) -> str:
     query = f"{org_name} 公式サイト"
     try:
-        results = list(search(query, num_results=5, lang="ja", sleep_interval=1))
+        hits = DDGS().text(query, region="jp-jp", max_results=5)
+        urls = [r["href"] for r in hits] if hits else []
     except Exception as e:
         log.warning(f"  検索失敗: {e}")
         return ""
 
     # 公式ドメインを優先
-    for url in results:
+    for url in urls:
         if any(d in url for d in OFFICIAL_DOMAINS):
             return url
 
-    return results[0] if results else ""
+    return urls[0] if urls else ""
 
 
 def main():
