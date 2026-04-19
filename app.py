@@ -60,7 +60,7 @@ def run_scrape(user_id: str) -> None:
             [sys.executable, script],
             capture_output=True,
             text=True,
-            timeout=600,          # 最大10分
+            timeout=1200,         # 最大20分
             cwd=os.path.dirname(os.path.abspath(__file__)),
         )
         if result.returncode == 0:
@@ -70,7 +70,7 @@ def run_scrape(user_id: str) -> None:
             log.error(f"scrape failed:\n{err}")
             push_message(user_id, f"⚠️ 実行中にエラーが発生しました。\n{err}")
     except subprocess.TimeoutExpired:
-        push_message(user_id, "⚠️ タイムアウトしました（10分超過）。")
+        push_message(user_id, "⚠️ タイムアウトしました（20分超過）。")
     except Exception as e:
         log.exception("run_scrape error")
         push_message(user_id, f"⚠️ 予期しないエラー: {e}")
