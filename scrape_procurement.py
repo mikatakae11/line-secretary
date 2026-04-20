@@ -224,6 +224,13 @@ def parse_date_str(text: str) -> date | None:
             return date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
         except ValueError:
             pass
+    # 2桁年（例: 25/4/1 → 2025-04-01）
+    m = re.search(r"\b(\d{2})[/\.](\d{1,2})[/\.](\d{1,2})\b", text)
+    if m:
+        try:
+            return date(2000 + int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        except ValueError:
+            pass
     return None
 
 
@@ -248,6 +255,22 @@ def extract_pub_date(text: str) -> date | None:
             if d:
                 return d
     return None
+
+
+def extract_earliest_date(text: str) -> date | None:
+    """テキスト中の全日付を抽出し最も早いものを返す（公開日の代替）"""
+    dates = []
+    for p in _DATE_PATTERNS:
+        for m in p.finditer(text):
+            d = parse_date_str(m.group(0))
+            if d:
+                dates.append(d)
+    return min(dates) if dates else None
+
+
+def get_pub_date(text: str) -> date | None:
+    """公開日キーワードで見つからなければテキスト内最古の日付を代替使用"""
+    return extract_pub_date(text) or extract_earliest_date(text)
 
 
 # ─── HTTP取得 ─────────────────────────────────────────────────────────────
@@ -298,7 +321,7 @@ def parse_tables(soup: BeautifulSoup, base_url: str, org_name: str,
 
             # 条件1: 前回リサーチ日より前に公開された案件は除外
             if last_research_date:
-                pub_date = extract_pub_date(row_text)
+                pub_date = get_pub_date(row_text)
                 if pub_date and pub_date < last_research_date:
                     continue
 
@@ -348,7 +371,7 @@ def parse_links(soup: BeautifulSoup, base_url: str, org_name: str,
 
         # 条件1: 前回リサーチ日より前に公開された案件は除外
         if last_research_date:
-            pub_date = extract_pub_date(ctx + " " + text)
+            pub_date = get_pub_date(ctx + " " + text)
             if pub_date and pub_date < last_research_date:
                 continue
 
