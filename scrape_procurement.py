@@ -365,9 +365,25 @@ PROC_TOP_KW = [
 ]
 
 
+SHIKAKU_FETCH_TIMEOUT = 3     # 資格登録リスト用タイムアウト（秒）
+SHIKAKU_PROC_LIMIT    = 2     # 入札情報ページの最大巡回数
+SHIKAKU_TIME_LIMIT    = 600   # 資格登録リスト全体の処理時間上限（秒）
+
+
+def fetch_shikaku(url: str) -> str | None:
+    """資格登録リスト用：タイムアウト3秒で取得"""
+    try:
+        r = requests.get(url, headers=HEADERS, timeout=SHIKAKU_FETCH_TIMEOUT, verify=False)
+        r.encoding = r.apparent_encoding or "utf-8"
+        return r.text
+    except Exception as e:
+        log.warning(f"  取得失敗: {url} — {e}")
+        return None
+
+
 def find_procurement_links(top_url: str) -> list[str]:
-    """トップページから入札情報ページへのリンクURLを返す（最大5件）"""
-    html = fetch(top_url)
+    """トップページから入札情報ページへのリンクURLを返す（最大2件）"""
+    html = fetch_shikaku(top_url)
     if not html:
         return []
     soup = BeautifulSoup(html, "lxml")
@@ -391,7 +407,7 @@ def find_procurement_links(top_url: str) -> list[str]:
             continue
         seen.add(link_url)
         found.append(link_url)
-        if len(found) >= 5:
+        if len(found) >= SHIKAKU_PROC_LIMIT:
             break
 
     return found
@@ -409,7 +425,7 @@ def scrape_via_top(org_name: str, top_url: str) -> list[dict]:
     seen_names: set[str] = set()
     for proc_url in proc_urls:
         log.info(f"  入札ページ: {proc_url}")
-        html = fetch(proc_url)
+        html = fetch_shikaku(proc_url)
         if not html:
             continue
         soup = BeautifulSoup(html, "lxml")
@@ -542,7 +558,11 @@ def main():
             all_items.append({"org": org_name, **item})
         time.sleep(REQUEST_INTERVAL)
 
+    shikaku_start = time.time()
     for org_name, url in shikaku_orgs:
+        if time.time() - shikaku_start > SHIKAKU_TIME_LIMIT:
+            log.warning("資格登録リストの処理時間上限（10分）に達したため打ち切ります")
+            break
         found = scrape_via_top(org_name, url)
         for item in found:
             all_items.append({"org": org_name, **item})
