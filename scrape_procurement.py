@@ -357,6 +357,84 @@ def parse_links(soup: BeautifulSoup, base_url: str, org_name: str,
     return results
 
 
+# 入札情報ページへ誘導するリンクのキーワード
+PROC_TOP_KW = [
+    "入札", "調達", "契約情報", "競争契約", "公告", "入札公告",
+    "調達情報", "契約・入札", "入札・契約", "物品・役務",
+    "公共調達", "競争入札", "随意契約",
+]
+
+
+def find_procurement_links(top_url: str) -> list[str]:
+    """トップページから入札情報ページへのリンクURLを返す（最大5件）"""
+    html = fetch(top_url)
+    if not html:
+        return []
+    soup = BeautifulSoup(html, "lxml")
+    for tag in soup(["script", "style", "noscript"]):
+        tag.decompose()
+
+    seen = set()
+    found = []
+    main = (soup.find("main")
+            or soup.find(id=re.compile(r"content|main|body", re.I))
+            or soup.body)
+    if not main:
+        return []
+
+    for a in main.find_all("a", href=True):
+        text = a.get_text(strip=True)
+        if not contains_any(text, PROC_TOP_KW):
+            continue
+        link_url = urljoin(top_url, a["href"])
+        if link_url in seen or link_url == top_url:
+            continue
+        seen.add(link_url)
+        found.append(link_url)
+        if len(found) >= 5:
+            break
+
+    return found
+
+
+def scrape_via_top(org_name: str, top_url: str) -> list[dict]:
+    """トップページ→入札情報ページの2段階巡回"""
+    log.info(f"巡回中(2段階): {org_name}")
+    proc_urls = find_procurement_links(top_url)
+    if not proc_urls:
+        log.info(f"  → 入札情報ページが見つからずスキップ")
+        return []
+
+    all_items: list[dict] = []
+    seen_names: set[str] = set()
+    for proc_url in proc_urls:
+        log.info(f"  入札ページ: {proc_url}")
+        html = fetch(proc_url)
+        if not html:
+            continue
+        soup = BeautifulSoup(html, "lxml")
+        for tag in soup(["script", "style", "noscript"]):
+            tag.decompose()
+
+        items = parse_tables(soup, proc_url, org_name)
+        seen_urls = {i["url"] for i in items}
+        for item in parse_links(soup, proc_url, org_name):
+            if item["url"] not in seen_urls:
+                items.append(item)
+                seen_urls.add(item["url"])
+
+        for i in items:
+            key = i["name"][:40]
+            if key not in seen_names:
+                seen_names.add(key)
+                all_items.append(i)
+
+        time.sleep(REQUEST_INTERVAL)
+
+    log.info(f"  → {len(all_items)} 件ヒット")
+    return all_items
+
+
 # ─── 1機関スクレイピング ──────────────────────────────────────────────────
 def scrape(org_name: str, url: str,
            last_research_date: date | None = None) -> list[dict]:
@@ -434,7 +512,7 @@ def main():
     shikaku_rows = shikaku_data["sheets"][0]["data"][0].get("rowData", [])
 
     existing_urls = {url for _, url, _ in orgs}
-    shikaku_count = 0
+    shikaku_orgs: list[tuple[str, str]] = []
     for row in shikaku_rows:
         vals = row.get("values", [])  # B, C, D, E, F の順（インデックス 0〜4）
         # B・C・D列のうち空白でない最初の値を機関名として使う
@@ -450,17 +528,22 @@ def main():
         url = vals[4].get("formattedValue", "").strip() if len(vals) >= 5 else ""
         if not url or url in existing_urls:
             continue
-        orgs.append((org_name, url, None))
+        shikaku_orgs.append((org_name, url))
         existing_urls.add(url)
-        shikaku_count += 1
 
-    log.info(f"「{SHIKAKU_SHEET}」から {shikaku_count} 機関追加")
-    log.info(f"巡回機関数合計: {len(orgs)}")
+    log.info(f"「{SHIKAKU_SHEET}」から {len(shikaku_orgs)} 機関追加")
+    log.info(f"巡回機関数合計: {len(orgs) + len(shikaku_orgs)}")
 
     # ── 各サイト巡回 ──
     all_items: list[dict] = []
     for org_name, url, last_date in orgs:
         found = scrape(org_name, url, last_date)
+        for item in found:
+            all_items.append({"org": org_name, **item})
+        time.sleep(REQUEST_INTERVAL)
+
+    for org_name, url in shikaku_orgs:
+        found = scrape_via_top(org_name, url)
         for item in found:
             all_items.append({"org": org_name, **item})
         time.sleep(REQUEST_INTERVAL)
