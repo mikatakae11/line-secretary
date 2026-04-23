@@ -57,17 +57,22 @@ def run_job_scout(user_id: str) -> None:
     job_scout_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "job-scout")
     script = os.path.join(job_scout_dir, "run-from-sheet.mjs")
     try:
+        spreadsheet_id = os.environ.get("JOB_SCOUT_SPREADSHEET_ID", "")
+        cmd = ["node", script]
+        if spreadsheet_id:
+            cmd.append(f"--spreadsheet={spreadsheet_id}")
         result = subprocess.run(
-            ["node", script],
+            cmd,
             capture_output=True,
             text=True,
             timeout=600,
             cwd=job_scout_dir,
+            env={**os.environ},
         )
         if result.returncode == 0:
             push_message(user_id, "✅ 案件取得が完了しました。\nスプレッドシートの「案件一覧」をご確認ください。")
         else:
-            err = result.stderr.strip()[:400] if result.stderr else "（詳細不明）"
+            err = (result.stderr or result.stdout or "").strip()[:400] or "（詳細不明）"
             log.error(f"job-scout failed:\n{err}")
             push_message(user_id, f"⚠️ 案件取得でエラーが発生しました。\n{err}")
     except subprocess.TimeoutExpired:
