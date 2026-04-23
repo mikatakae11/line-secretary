@@ -1,22 +1,14 @@
-import { createServer } from 'http';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { homedir } from 'os';
 import { fileURLToPath } from 'url';
-import { google } from 'googleapis';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_CONFIG_DIR = join(homedir(), '.job-scout');
 const TOKENS_FILE_NAME = 'tokens.json';
-const DEFAULT_REDIRECT_PORT = 3001;
-const SHEETS_SCOPES = [
-  'https://www.googleapis.com/auth/spreadsheets',
-];
-const ENV_CANDIDATE_PATHS = [
-  join(__dirname, '.env'),
-];
+const ENV_CANDIDATE_PATHS = [join(__dirname, '.env')];
 
-// dotenvを使わずに.envファイルを読み込む（外部パッケージ不要）
+// dotenvを使わずに.envファイルを直接パース
 function loadEnvFile(filePath) {
   try {
     const content = readFileSync(filePath, 'utf-8');
@@ -37,8 +29,7 @@ let envLoaded = false;
 export function loadScoutEnv() {
   if (envLoaded) return;
   for (const path of ENV_CANDIDATE_PATHS) {
-    if (!existsSync(path)) continue;
-    loadEnvFile(path);
+    if (existsSync(path)) loadEnvFile(path);
   }
   envLoaded = true;
 }
@@ -50,34 +41,6 @@ export function getScoutConfigDir() {
 
 export function getScoutTokensPath() {
   return join(getScoutConfigDir(), TOKENS_FILE_NAME);
-}
-
-export function getRedirectPort() {
-  loadScoutEnv();
-  const port = Number(process.env.SCOUT_OAUTH_PORT || DEFAULT_REDIRECT_PORT);
-  return Number.isFinite(port) && port > 0 ? Math.trunc(port) : DEFAULT_REDIRECT_PORT;
-}
-
-export function getRedirectUri() {
-  return `http://localhost:${getRedirectPort()}/oauth2callback`;
-}
-
-function getClientCredentials() {
-  loadScoutEnv();
-  const clientId = process.env.GOOGLE_CLIENT_ID;
-  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
-  if (!clientId || !clientSecret) {
-    throw new Error(
-      'GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET が未設定です。' +
-      ' job-scout/.env に設定してください。'
-    );
-  }
-  return { clientId, clientSecret };
-}
-
-export function createOAuthClient() {
-  const { clientId, clientSecret } = getClientCredentials();
-  return new google.auth.OAuth2(clientId, clientSecret, getRedirectUri());
 }
 
 export function readStoredTokens() {
@@ -96,111 +59,91 @@ export function saveStoredTokens(tokens) {
   writeFileSync(getScoutTokensPath(), JSON.stringify(tokens, null, 2), 'utf-8');
 }
 
-function attachAutoRefreshSave(client, baseTokens = {}) {
-  client.on('tokens', (newTokens) => {
-    const merged = {
-      access_token: newTokens.access_token || baseTokens.access_token || '',
-      refresh_token: newTokens.refresh_token || baseTokens.refresh_token || '',
-      expiry_date: newTokens.expiry_date || baseTokens.expiry_date || 0,
-      token_type: newTokens.token_type || baseTokens.token_type || 'Bearer',
-      scope: newTokens.scope || baseTokens.scope || SHEETS_SCOPES.join(' '),
-    };
-    saveStoredTokens(merged);
+// OAuth2トークンをリフレッシュ
+async function refreshAccessToken(tokens) {
+  loadScoutEnv();
+  const clientId = process.env.GOOGLE_CLIENT_ID;
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+  if (!clientId || !clientSecret) {
+    throw new Error('GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET が未設定です。');
+  }
+  const resp = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      client_id: clientId,
+      client_secret: clientSecret,
+      refresh_token: tokens.refresh_token,
+      grant_type: 'refresh_token',
+    }),
   });
+  const data = await resp.json();
+  if (!resp.ok) throw new Error(`Token refresh failed: ${JSON.stringify(data)}`);
+  return {
+    ...tokens,
+    access_token: data.access_token,
+    expiry_date: Date.now() + (data.expires_in || 3600) * 1000,
+  };
 }
 
-export function getAuthenticatedOAuthClient() {
-  const tokens = readStoredTokens();
-  if (!tokens?.refresh_token) {
-    throw new Error(
-      'Google Sheets に未認証です。先に `npm run auth:google` を実行してください。'
-    );
+// 有効なアクセストークンを取得（期限切れなら自動リフレッシュ）
+let cachedTokens = null;
+
+async function getAccessToken() {
+  if (!cachedTokens) {
+    cachedTokens = readStoredTokens();
+    if (!cachedTokens?.refresh_token) {
+      throw new Error('Google Sheets に未認証です。先に `node auth-google.mjs` を実行してください。');
+    }
+  }
+  const isExpired = !cachedTokens.expiry_date || Date.now() >= cachedTokens.expiry_date - 60000;
+  if (isExpired || !cachedTokens.access_token) {
+    cachedTokens = await refreshAccessToken(cachedTokens);
+    // ローカル環境なら保存する（Renderは環境変数なので保存不要）
+    if (!process.env.JOB_SCOUT_TOKENS_JSON) saveStoredTokens(cachedTokens);
+  }
+  return cachedTokens.access_token;
+}
+
+// Google Sheets APIをfetchで直接呼ぶシンプルなクライアント
+function createSheetsClient() {
+  const BASE = 'https://sheets.googleapis.com/v4/spreadsheets';
+
+  async function apiFetch(url, options = {}) {
+    const token = await getAccessToken();
+    const resp = await fetch(url, {
+      ...options,
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', ...options.headers },
+    });
+    const json = await resp.json();
+    if (!resp.ok) throw new Error(`Sheets API error: ${JSON.stringify(json)}`);
+    return json;
   }
 
-  const client = createOAuthClient();
-  client.setCredentials(tokens);
-  attachAutoRefreshSave(client, tokens);
-  return client;
+  return {
+    spreadsheets: {
+      values: {
+        async get({ spreadsheetId, range }) {
+          const url = `${BASE}/${spreadsheetId}/values/${encodeURIComponent(range)}`;
+          const data = await apiFetch(url);
+          return { data };
+        },
+        async update({ spreadsheetId, range, valueInputOption, requestBody }) {
+          const url = `${BASE}/${spreadsheetId}/values/${encodeURIComponent(range)}?valueInputOption=${valueInputOption}`;
+          const data = await apiFetch(url, { method: 'PUT', body: JSON.stringify(requestBody) });
+          return { data };
+        },
+        async append({ spreadsheetId, range, valueInputOption, insertDataOption, requestBody }) {
+          const params = new URLSearchParams({ valueInputOption, insertDataOption: insertDataOption || 'INSERT_ROWS' });
+          const url = `${BASE}/${spreadsheetId}/values/${encodeURIComponent(range)}:append?${params}`;
+          const data = await apiFetch(url, { method: 'POST', body: JSON.stringify(requestBody) });
+          return { data };
+        },
+      },
+    },
+  };
 }
 
 export function getSheetsClient() {
-  return google.sheets({ version: 'v4', auth: getAuthenticatedOAuthClient() });
-}
-
-export function buildAuthUrl() {
-  const client = createOAuthClient();
-  const authUrl = client.generateAuthUrl({
-    access_type: 'offline',
-    scope: SHEETS_SCOPES,
-    prompt: 'consent',
-  });
-  return { client, authUrl };
-}
-
-export function waitForOAuthCallback(client) {
-  const port = getRedirectPort();
-  return new Promise((resolve, reject) => {
-    const server = createServer(async (req, res) => {
-      try {
-        const url = new URL(req.url || '', `http://localhost:${port}`);
-        if (url.pathname !== '/oauth2callback') {
-          res.writeHead(404);
-          res.end('Not found');
-          return;
-        }
-
-        const error = url.searchParams.get('error');
-        const code = url.searchParams.get('code');
-
-        if (error) {
-          res.writeHead(400);
-          res.end(`Authentication failed: ${error}`);
-          server.close();
-          reject(new Error(`OAuth error: ${error}`));
-          return;
-        }
-
-        if (!code) {
-          res.writeHead(400);
-          res.end('No authorization code received');
-          server.close();
-          reject(new Error('No authorization code received'));
-          return;
-        }
-
-        const { tokens } = await client.getToken(code);
-        client.setCredentials(tokens);
-
-        const storedTokens = {
-          access_token: tokens.access_token || '',
-          refresh_token: tokens.refresh_token || '',
-          expiry_date: tokens.expiry_date || 0,
-          token_type: tokens.token_type || 'Bearer',
-          scope: tokens.scope || SHEETS_SCOPES.join(' '),
-        };
-        saveStoredTokens(storedTokens);
-        attachAutoRefreshSave(client, storedTokens);
-
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-        res.end('<html><body><h1>認証成功</h1><p>このタブを閉じて OK です。</p></body></html>');
-
-        server.close();
-        resolve(storedTokens);
-      } catch (error) {
-        res.writeHead(500);
-        res.end('Internal error');
-        server.close();
-        reject(error);
-      }
-    });
-
-    server.listen(port, () => {
-      process.stderr.write(`🔐 OAuth コールバック待機中: http://localhost:${port}/oauth2callback\n`);
-    });
-
-    setTimeout(() => {
-      server.close();
-      reject(new Error('OAuth 認証がタイムアウトしました（5分）'));
-    }, 5 * 60 * 1000);
-  });
+  return createSheetsClient();
 }
