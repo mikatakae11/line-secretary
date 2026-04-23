@@ -57,10 +57,10 @@ def run_job_scout(user_id: str) -> None:
     job_scout_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "job-scout")
     script = os.path.join(job_scout_dir, "run-from-sheet.mjs")
     try:
-        spreadsheet_id = os.environ.get("JOB_SCOUT_SPREADSHEET_ID", "")
-        cmd = ["node", script]
-        if spreadsheet_id:
-            cmd.append(f"--spreadsheet={spreadsheet_id}")
+        spreadsheet_id = os.environ.get("JOB_SCOUT_SPREADSHEET_ID") or os.environ.get("SPREADSHEET_ID") or ""
+        script_exists = os.path.exists(script)
+        log.info(f"[job-scout] spreadsheet_id={repr(spreadsheet_id)} script_exists={script_exists}")
+        cmd = ["node", script, f"--spreadsheet={spreadsheet_id}"]
         result = subprocess.run(
             cmd,
             capture_output=True,
@@ -74,7 +74,8 @@ def run_job_scout(user_id: str) -> None:
         else:
             err = (result.stderr or result.stdout or "").strip()[:400] or "（詳細不明）"
             log.error(f"job-scout failed:\n{err}")
-            push_message(user_id, f"⚠️ 案件取得でエラーが発生しました。\n{err}")
+            debug = f"sid={repr(spreadsheet_id[:8] if spreadsheet_id else '')} exists={script_exists}"
+            push_message(user_id, f"⚠️ 案件取得エラー [{debug}]\n{err}")
     except subprocess.TimeoutExpired:
         push_message(user_id, "⚠️ タイムアウトしました（10分超過）。")
     except Exception as e:
