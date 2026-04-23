@@ -1,26 +1,22 @@
 services:
   - type: web
     name: line-procurement-bot
-    env: python
+    env: docker
     plan: free
-    buildCommand: pip install -r requirements.txt && npm install --prefix ./job-scout
-    startCommand: gunicorn app:app --workers 1 --threads 4 --timeout 120
     envVars:
       - key: LINE_CHANNEL_SECRET
-        sync: false          # Renderダッシュボードで手動設定
+        sync: false
       - key: LINE_CHANNEL_ACCESS_TOKEN
         sync: false
       - key: ANTHROPIC_API_KEY
         sync: false
       - key: GOOGLE_CREDENTIALS_JSON
-        sync: false          # hp-research-account.json の中身をそのまま貼り付け
+        sync: false
       - key: JOB_SCOUT_TOKENS_JSON
-        sync: false          # ~/.job-scout/tokens.json の中身をそのまま貼り付け
+        sync: false
       - key: GOOGLE_CLIENT_ID
         sync: false
       - key: GOOGLE_CLIENT_SECRET
         sync: false
       - key: SPREADSHEET_ID
-        sync: false          # job-scout用スプレッドシートID
-      - key: PYTHON_VERSION
-        value: "3.11.0"
+        sync: false
