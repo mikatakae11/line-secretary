@@ -67,7 +67,7 @@ def run_job_scout(user_id: str) -> None:
         if result.returncode == 0:
             push_message(user_id, "✅ 案件取得が完了しました。\nスプレッドシートの「案件一覧」をご確認ください。")
         else:
-            err = result.stderr.strip()[-300:] if result.stderr else "（詳細不明）"
+            err = result.stderr.strip()[:400] if result.stderr else "（詳細不明）"
             log.error(f"job-scout failed:\n{err}")
             push_message(user_id, f"⚠️ 案件取得でエラーが発生しました。\n{err}")
     except subprocess.TimeoutExpired:
