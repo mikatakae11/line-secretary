@@ -52,6 +52,31 @@ def push_message(user_id: str, text: str) -> None:
         )
 
 
+# ─── バックグラウンド: 案件スカウト実行 ──────────────────────────────────────
+def run_job_scout(user_id: str) -> None:
+    job_scout_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "job-scout")
+    script = os.path.join(job_scout_dir, "run-from-sheet.mjs")
+    try:
+        result = subprocess.run(
+            ["node", script],
+            capture_output=True,
+            text=True,
+            timeout=600,
+            cwd=job_scout_dir,
+        )
+        if result.returncode == 0:
+            push_message(user_id, "✅ 案件取得が完了しました。\nスプレッドシートの「案件一覧」をご確認ください。")
+        else:
+            err = result.stderr.strip()[-300:] if result.stderr else "（詳細不明）"
+            log.error(f"job-scout failed:\n{err}")
+            push_message(user_id, f"⚠️ 案件取得でエラーが発生しました。\n{err}")
+    except subprocess.TimeoutExpired:
+        push_message(user_id, "⚠️ タイムアウトしました（10分超過）。")
+    except Exception as e:
+        log.exception("run_job_scout error")
+        push_message(user_id, f"⚠️ 予期しないエラー: {e}")
+
+
 # ─── バックグラウンド: スクレイピング実行 ────────────────────────────────────
 def run_scrape(user_id: str) -> None:
     script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scrape_procurement.py")
@@ -108,11 +133,21 @@ def handle_message(event: MessageEvent) -> None:
             ))
             threading.Thread(target=run_scrape, args=(user_id,), daemon=True).start()
 
+        # ── 案件取得コマンド ──────────────────────────────────────────────
+        elif "案件取得" in text:
+            api.reply_message(ReplyMessageRequest(
+                reply_token=event.reply_token,
+                messages=[TextMessage(
+                    text="🔍 案件取得を開始します。\n完了までしばらくお待ちください（目安：約3分）。"
+                )],
+            ))
+            threading.Thread(target=run_job_scout, args=(user_id,), daemon=True).start()
+
         # ── その他 ───────────────────────────────────────────────────────
         else:
             api.reply_message(ReplyMessageRequest(
                 reply_token=event.reply_token,
-                messages=[TextMessage(text="「リサーチ」と送ると官公庁の案件を調べます")],
+                messages=[TextMessage(text="「リサーチ」→ 官公庁案件調査\n「案件取得」→ フリーランス案件取得")],
             ))
 
 
