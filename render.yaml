@@ -3,7 +3,7 @@ services:
     name: line-procurement-bot
     env: python
     plan: free
-    buildCommand: pip install -r requirements.txt && cd job-scout && npm install
+    buildCommand: pip install -r requirements.txt && npm install --prefix ./job-scout
     startCommand: gunicorn app:app --workers 1 --threads 4 --timeout 120
     envVars:
       - key: LINE_CHANNEL_SECRET
