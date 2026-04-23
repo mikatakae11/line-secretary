@@ -63,7 +63,9 @@ def run_job_scout(user_id: str) -> None:
             "1tmuRePgdiAN7xG_hQaf-Zg6bNx6S_C8-_ia0f_vHl9M"
         )
         script_exists = os.path.exists(script)
-        log.info(f"[job-scout] spreadsheet_id={repr(spreadsheet_id)} script_exists={script_exists}")
+        tokens_set = bool(os.environ.get("JOB_SCOUT_TOKENS_JSON"))
+        client_id_set = bool(os.environ.get("GOOGLE_CLIENT_ID"))
+        log.info(f"[job-scout] spreadsheet_id={repr(spreadsheet_id)} script_exists={script_exists} tokens={tokens_set} client_id={client_id_set}")
         cmd = ["node", script, f"--spreadsheet={spreadsheet_id}"]
         result = subprocess.run(
             cmd,
@@ -78,7 +80,7 @@ def run_job_scout(user_id: str) -> None:
         else:
             err = (result.stderr or result.stdout or "").strip()[:400] or "（詳細不明）"
             log.error(f"job-scout failed:\n{err}")
-            debug = f"sid={repr(spreadsheet_id[:8] if spreadsheet_id else '')} exists={script_exists}"
+            debug = f"sid={repr(spreadsheet_id[:8] if spreadsheet_id else '')} exists={script_exists} tokens={tokens_set} cid={client_id_set}"
             push_message(user_id, f"⚠️ 案件取得エラー [{debug}]\n{err}")
     except subprocess.TimeoutExpired:
         push_message(user_id, "⚠️ タイムアウトしました（10分超過）。")
