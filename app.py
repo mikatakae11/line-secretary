@@ -57,7 +57,11 @@ def run_job_scout(user_id: str) -> None:
     job_scout_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "job-scout")
     script = os.path.join(job_scout_dir, "run-from-sheet.mjs")
     try:
-        spreadsheet_id = os.environ.get("JOB_SCOUT_SPREADSHEET_ID") or os.environ.get("SPREADSHEET_ID") or ""
+        spreadsheet_id = (
+            os.environ.get("JOB_SCOUT_SPREADSHEET_ID") or
+            os.environ.get("SPREADSHEET_ID") or
+            "1tmuRePgdiAN7xG_hQaf-Zg6bNx6S_C8-_ia0f_vHl9M"
+        )
         script_exists = os.path.exists(script)
         log.info(f"[job-scout] spreadsheet_id={repr(spreadsheet_id)} script_exists={script_exists}")
         cmd = ["node", script, f"--spreadsheet={spreadsheet_id}"]
