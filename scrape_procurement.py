@@ -540,53 +540,12 @@ def main():
                 last_date = parse_date_str(date_str)
         orgs.append((text, hyperlink, last_date))
 
-    log.info(f"「{SOURCE_SHEET}」から {len(orgs)} 機関読み込み")
-
-    # ── 資格登録リストからURL読み込み（F列） ──
-    shikaku_data = service.spreadsheets().get(
-        spreadsheetId=SPREADSHEET_ID,
-        ranges=[f"'{SHIKAKU_SHEET}'!B1:F600"],
-        includeGridData=True,
-    ).execute()
-    shikaku_rows = shikaku_data["sheets"][0]["data"][0].get("rowData", [])
-
-    existing_urls = {url for _, url, _ in orgs}
-    shikaku_orgs: list[tuple[str, str]] = []
-    for row in shikaku_rows:
-        vals = row.get("values", [])  # B, C, D, E, F の順（インデックス 0〜4）
-        # B・C・D列のうち空白でない最初の値を機関名として使う
-        org_name = ""
-        for cell in vals[:3]:
-            v = cell.get("formattedValue", "").strip().strip("\u3000")
-            if v:
-                org_name = v
-                break
-        if not org_name:
-            continue
-        # F列はインデックス4
-        url = vals[4].get("formattedValue", "").strip() if len(vals) >= 5 else ""
-        if not url or url in existing_urls:
-            continue
-        shikaku_orgs.append((org_name, url))
-        existing_urls.add(url)
-
-    log.info(f"「{SHIKAKU_SHEET}」から {len(shikaku_orgs)} 機関追加")
-    log.info(f"巡回機関数合計: {len(orgs) + len(shikaku_orgs)}")
+    log.info(f"機関数: {len(orgs)}")
 
     # ── 各サイト巡回 ──
     all_items: list[dict] = []
     for org_name, url, last_date in orgs:
         found = scrape(org_name, url, last_date)
-        for item in found:
-            all_items.append({"org": org_name, **item})
-        time.sleep(REQUEST_INTERVAL)
-
-    shikaku_start = time.time()
-    for org_name, url in shikaku_orgs:
-        if time.time() - shikaku_start > SHIKAKU_TIME_LIMIT:
-            log.warning("資格登録リストの処理時間上限（10分）に達したため打ち切ります")
-            break
-        found = scrape_via_top(org_name, url)
         for item in found:
             all_items.append({"org": org_name, **item})
         time.sleep(REQUEST_INTERVAL)
