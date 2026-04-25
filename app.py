@@ -163,6 +163,32 @@ def handle_message(event: MessageEvent) -> None:
             ))
 
 
+# ─── トリガーエンドポイント（x-auto-postから呼び出す） ───────────────────────
+TRIGGER_SECRET = os.environ.get("TRIGGER_SECRET", "")
+
+def _check_trigger_auth():
+    if TRIGGER_SECRET and request.headers.get("X-Trigger-Secret") != TRIGGER_SECRET:
+        abort(403)
+
+@app.route("/trigger/scrape", methods=["POST"])
+def trigger_scrape():
+    _check_trigger_auth()
+    user_id = request.json.get("user_id")
+    if not user_id:
+        return {"error": "user_id required"}, 400
+    threading.Thread(target=run_scrape, args=(user_id,), daemon=True).start()
+    return {"status": "started"}
+
+@app.route("/trigger/job-scout", methods=["POST"])
+def trigger_job_scout():
+    _check_trigger_auth()
+    user_id = request.json.get("user_id")
+    if not user_id:
+        return {"error": "user_id required"}, 400
+    threading.Thread(target=run_job_scout, args=(user_id,), daemon=True).start()
+    return {"status": "started"}
+
+
 # ─── ヘルスチェック ───────────────────────────────────────────────────────────
 @app.route("/", methods=["GET"])
 def health():
