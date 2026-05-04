@@ -89,6 +89,32 @@ def run_job_scout(user_id: str) -> None:
         push_message(user_id, f"⚠️ 予期しないエラー: {e}")
 
 
+# ─── バックグラウンド: 応募文作成 ────────────────────────────────────────────
+def run_cover_letters(user_id: str) -> None:
+    job_scout_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "job-scout")
+    script = os.path.join(job_scout_dir, "write-cover-letters.mjs")
+    try:
+        result = subprocess.run(
+            ["node", script],
+            capture_output=True,
+            text=True,
+            timeout=600,
+            cwd=job_scout_dir,
+            env={**os.environ},
+        )
+        if result.returncode == 0:
+            push_message(user_id, "✅ 応募文の作成が完了しました。\nスプレッドシートの「案件一覧」L列をご確認ください。")
+        else:
+            err = (result.stderr or result.stdout or "").strip()[:400] or "（詳細不明）"
+            log.error(f"cover-letters failed:\n{err}")
+            push_message(user_id, f"⚠️ 応募文作成エラー\n{err}")
+    except subprocess.TimeoutExpired:
+        push_message(user_id, "⚠️ タイムアウトしました（10分超過）。")
+    except Exception as e:
+        log.exception("run_cover_letters error")
+        push_message(user_id, f"⚠️ 予期しないエラー: {e}")
+
+
 # ─── バックグラウンド: スクレイピング実行 ────────────────────────────────────
 def run_scrape(user_id: str) -> None:
     script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scrape_procurement.py")
@@ -186,6 +212,15 @@ def trigger_job_scout():
     if not user_id:
         return {"error": "user_id required"}, 400
     threading.Thread(target=run_job_scout, args=(user_id,), daemon=True).start()
+    return {"status": "started"}
+
+@app.route("/trigger/cover-letters", methods=["POST"])
+def trigger_cover_letters():
+    _check_trigger_auth()
+    user_id = request.json.get("user_id")
+    if not user_id:
+        return {"error": "user_id required"}, 400
+    threading.Thread(target=run_cover_letters, args=(user_id,), daemon=True).start()
     return {"status": "started"}
 
 
