@@ -194,9 +194,12 @@ function parseJobWorkload(text) {
 
 function parseInstructionKeywords(instruction) {
   if (!instruction) return [];
-  const delimiters = /[、,，\s　・／/]+/;
-  return instruction
+  // 【カテゴリ名】ラベルを除去してからキーワードを抽出
+  const cleaned = instruction.replace(/【[^】]*】/g, ' ');
+  const delimiters = /[、,，\n　・／/]+/;
+  return cleaned
     .split(delimiters)
+    .flatMap((token) => token.trim().split(/\s+/))
     .map((token) => token.trim())
     .filter((token) => token.length > 0);
 }
