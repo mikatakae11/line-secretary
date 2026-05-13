@@ -18,6 +18,10 @@ export const KEYWORDS = {
   training: [
     'AI研修', '研修', '講師', '動画制作', '自治体',
   ],
+  writing: [
+    'ライティング', 'ライター', 'SEO', 'YouTube台本', '台本', 'シナリオ',
+    'コピーライティング', '記事作成', 'ブログ', 'コンテンツ',
+  ],
 };
 
 export const ALL_KEYWORDS = Object.values(KEYWORDS).flat();

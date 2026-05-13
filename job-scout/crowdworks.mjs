@@ -14,9 +14,8 @@ import { SEARCH_QUERIES, WIDE_SEARCH_QUERIES } from './config.mjs';
 
 const PLATFORM = 'crowdworks';
 const BASE = 'https://crowdworks.jp';
-const GROUP_SOURCES = [
-  { label: 'AI機械学習', path: '/public/jobs/group/ai_machine_learning' },
-];
+// GROUP_SOURCESはHAS_CUSTOM_QUERIES確定後に下で定義
+const _AI_GROUP_SOURCE = { label: 'AI機械学習', path: '/public/jobs/group/ai_machine_learning' };
 const DEFAULT_QUERIES = ['AI', '生成AI', 'ChatGPT', 'AI チャットボット', 'GAS', '業務改善', 'DX'];
 
 const STRONG_POSITIVE_PATTERNS = [
@@ -61,6 +60,9 @@ function getArgValue(name) {
 
 const RELAXED_SEARCH = ['1', 'true', 'yes'].includes((getArgValue('--relaxed') || '').toLowerCase());
 const HAS_CUSTOM_QUERIES = (getArgValue('--queries') || '').trim().length > 0;
+
+// カスタムクエリがある場合はAI機械学習グループを除外（指示に沿った探索のみ行う）
+const GROUP_SOURCES = HAS_CUSTOM_QUERIES ? [] : [_AI_GROUP_SOURCE];
 
 function uniqueValues(values) {
   return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
