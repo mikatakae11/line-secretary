@@ -3,40 +3,67 @@
  * - URLから募集要項・クライアント情報・レビューを取得
  * - テンプレがあればそれを使用
  * - AI感のない自然な文章で生成
+ *
+ * 事前準備:
+ *   1. profile.example.json をコピーして profile.json を作成し、自分の情報を記入
+ *   2. .env に ANTHROPIC_API_KEY と SPREADSHEET_ID を設定
  */
+import { readFileSync, existsSync } from 'fs';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
 import { getSheetsClient, loadScoutEnv } from './google-sheets-auth.mjs';
 
+const __dirname = dirname(fileURLToPath(import.meta.url));
 loadScoutEnv();
 
-const SPREADSHEET_ID = process.env.JOB_SCOUT_SPREADSHEET_ID || process.env.SPREADSHEET_ID || '1tmuRePgdiAN7xG_hQaf-Zg6bNx6S_C8-_ia0f_vHl9M';
+const SPREADSHEET_ID = process.env.JOB_SCOUT_SPREADSHEET_ID || process.env.SPREADSHEET_ID || '';
 const LIST_SHEET = '案件一覧';
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 
-const PROFILE = `
+if (!SPREADSHEET_ID) {
+  console.error('❌ .env に SPREADSHEET_ID を設定してください（.env.example を参照）');
+  process.exit(1);
+}
+if (!ANTHROPIC_API_KEY) {
+  console.error('❌ .env に ANTHROPIC_API_KEY を設定してください（.env.example を参照）');
+  process.exit(1);
+}
+
+// プロフィールを profile.json から読み込む
+function loadProfile() {
+  const profilePath = join(__dirname, 'profile.json');
+  const examplePath = join(__dirname, 'profile.example.json');
+  if (!existsSync(profilePath)) {
+    console.error('❌ profile.json が見つかりません。');
+    console.error('   profile.example.json をコピーして profile.json を作成し、自分の情報を記入してください。');
+    process.exit(1);
+  }
+  const p = JSON.parse(readFileSync(profilePath, 'utf-8'));
+  return `
 ■ 基本情報
-名前：髙江海香（たかえみか）、40歳、女性、未婚
+名前：${p.name}、${p.age}、${p.gender}、${p.marital_status}
 
 ■ 職業・経験
-- 在宅秘書（業務委託）1年以上
-- YouTube台本制作（スカッと系・日本称賛系・朗読系・漫画系）10本以上
-- 文字起こし業務経験あり
-- モデル・飲食店経営の職歴あり
-- AIコミュニティでライティングを勉強中（2024年12月〜）
-- Claude AIを活用したライティング
+${(p.jobs || []).map(j => `- ${j}`).join('\n')}
 
-■ スキル・得意分野
-- 秘書業務で培った正確性・細部への気配り・時間管理
-- YouTube台本：プロットからオチまで、伏線・抑揚・演出
-- 得意ジャンル：美容・健康・教育・旅行・食・映画ドラマ・シナリオ
-- 即レス（12時間以内）・納期厳守・長期継続希望
+■ スキル・強み
+${(p.skills || []).map(s => `- ${s}`).join('\n')}
+
+■ 得意ジャンル
+${(p.genres || []).join('、')}
 
 ■ 稼働時間
-1日3〜5時間、週15〜20時間。平日・休日ともに対応可能。
+${p.available_hours}
 
-■ 趣味・人柄
-旅行（ほぼ毎月、年数回は1ヶ月単位の長期旅行）、映画・ドラマ（週15〜20話）、健康・食
-数学専攻（大学）、健康オタク、発酵食品・腸活に詳しい
+■ 使用ツール
+${(p.tools || []).join('、')}
+
+■ 自己PR
+${p.pr}
 `.trim();
+}
+
+const PROFILE = loadProfile();
 
 // URLから本文テキストを取得
 async function fetchPageText(url) {
@@ -47,7 +74,6 @@ async function fetchPageText(url) {
     });
     if (!res.ok) return '';
     const html = await res.text();
-    // HTMLタグを除去して本文を抽出
     return html
       .replace(/<script[\s\S]*?<\/script>/gi, '')
       .replace(/<style[\s\S]*?<\/style>/gi, '')
@@ -59,7 +85,7 @@ async function fetchPageText(url) {
       .replace(/&quot;/g, '"')
       .replace(/\s+/g, ' ')
       .trim()
-      .slice(0, 6000); // 長すぎる場合は切り詰め
+      .slice(0, 6000);
   } catch {
     return '';
   }
@@ -85,7 +111,7 @@ async function callClaude(prompt) {
 }
 
 async function generateCoverLetter(job, pageText) {
-  const prompt = `あなたはフリーランスライターの髙江海香（40歳女性）です。以下の案件に応募するための文章を書いてください。
+  const prompt = `あなたはフリーランサーです。以下の案件に応募するための文章を書いてください。
 
 【あなたのプロフィール】
 ${PROFILE}
@@ -106,11 +132,10 @@ ${pageText || '（取得できませんでした）'}
 2. テンプレがない場合は自然な応募文を書く（400〜600文字）
 3. クライアントのレビューや要望から「この人が重視していること」を読み取り、そこに刺さる内容にする
 4. AI感・テンプレ感を一切出さない。「〜させていただきます」「〜幸いです」の多用を避ける
-5. 髙江海香本人が書いたような自然な口語文体を意識する
+5. 本人が書いたような自然な口語文体を意識する
 6. 具体的なエピソードや数字を使い、信頼感を出す
 7. 長すぎず、読みやすい文章にする
 8. 宛名・件名は不要。本文のみ出力する
-9. 「ご検討よろしくお願いします」など定番の締めも自然に
 
 応募文のみを出力してください。解説や前置きは一切不要です。`;
 
@@ -157,7 +182,6 @@ async function main() {
 
     console.log(`[${rowIndex}行目] ${job.title}`);
 
-    // URLから募集ページを取得
     let pageText = '';
     if (job.url) {
       process.stdout.write('  → ページ取得中...');

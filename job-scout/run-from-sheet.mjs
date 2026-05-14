@@ -799,9 +799,7 @@ async function main() {
   loadScoutEnv();
   const spreadsheetId = getArgValue('--spreadsheet') || process.env.JOB_SCOUT_SPREADSHEET_ID || process.env.SPREADSHEET_ID || '';
   if (!spreadsheetId) {
-    throw new Error(
-      '.env に SPREADSHEET_ID を設定してください'
-    );
+    throw new Error('.env の SPREADSHEET_ID を設定してください（.env.example を参照）');
   }
 
   const sheets = await getSheets();

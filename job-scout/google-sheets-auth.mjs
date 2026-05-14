@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
+import { createServer } from 'http';
 import { join, dirname } from 'path';
 import { homedir } from 'os';
 import { fileURLToPath } from 'url';
@@ -140,10 +141,99 @@ function createSheetsClient() {
           return { data };
         },
       },
+      async batchUpdate({ spreadsheetId, requestBody }) {
+        const url = `${BASE}/${spreadsheetId}:batchUpdate`;
+        const data = await apiFetch(url, { method: 'POST', body: JSON.stringify(requestBody) });
+        return { data };
+      },
+      async get({ spreadsheetId, fields }) {
+        const params = fields ? `?fields=${encodeURIComponent(fields)}` : '';
+        const url = `${BASE}/${spreadsheetId}${params}`;
+        const data = await apiFetch(url);
+        return { data };
+      },
     },
   };
 }
 
 export function getSheetsClient() {
   return createSheetsClient();
+}
+
+// ─── OAuth2 認証フロー（auth-google.mjs から使用）────────────────────────────
+
+const REDIRECT_PORT = 4040;
+
+export function getRedirectUri() {
+  return `http://localhost:${REDIRECT_PORT}/oauth2callback`;
+}
+
+export function buildAuthUrl() {
+  loadScoutEnv();
+  const clientId = process.env.GOOGLE_CLIENT_ID;
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+  if (!clientId || !clientSecret) {
+    throw new Error('GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET が未設定です。');
+  }
+  const redirectUri = getRedirectUri();
+  const authUrl = 'https://accounts.google.com/o/oauth2/v2/auth?' +
+    new URLSearchParams({
+      client_id: clientId,
+      redirect_uri: redirectUri,
+      response_type: 'code',
+      scope: 'https://www.googleapis.com/auth/spreadsheets',
+      access_type: 'offline',
+      prompt: 'consent',
+    }).toString();
+  return { client: { clientId, clientSecret, redirectUri }, authUrl };
+}
+
+export function waitForOAuthCallback(client) {
+  return new Promise((resolve, reject) => {
+    const server = createServer(async (req, res) => {
+      const url = new URL(req.url, `http://localhost:${REDIRECT_PORT}`);
+      if (url.pathname !== '/oauth2callback') {
+        res.writeHead(404); res.end(); return;
+      }
+      const code = url.searchParams.get('code');
+      if (!code) {
+        res.writeHead(400); res.end('No code');
+        reject(new Error('認証コードが取得できませんでした'));
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end('<h1>認証完了！このタブを閉じてください。</h1>');
+      server.close();
+      try {
+        const resp = await fetch('https://oauth2.googleapis.com/token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({
+            client_id: client.clientId,
+            client_secret: client.clientSecret,
+            redirect_uri: client.redirectUri,
+            grant_type: 'authorization_code',
+            code,
+          }),
+        });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(`Token exchange failed: ${JSON.stringify(data)}`);
+        const tokens = {
+          access_token: data.access_token,
+          refresh_token: data.refresh_token,
+          expiry_date: Date.now() + (data.expires_in || 3600) * 1000,
+          token_type: data.token_type,
+          scope: data.scope,
+        };
+        saveStoredTokens(tokens);
+        resolve(tokens);
+      } catch (err) {
+        reject(err);
+      }
+    });
+    server.listen(REDIRECT_PORT, () => {
+      process.stderr.write(`ローカルサーバーを起動しました (port ${REDIRECT_PORT})\n`);
+    });
+    server.on('error', reject);
+  });
 }
